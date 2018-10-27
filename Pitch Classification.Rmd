@@ -1,0 +1,522 @@
+---
+title: "Pitch Classification Problem"
+author: "Jonathan"
+date: "March 6, 2017"
+output: html_document
+---
+
+```{r setup, include=FALSE, warning=FALSE, message=FALSE, cache=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+```
+
+```{r}
+#Read in training set and load required packages
+
+setwd("/nfs/home/jsl2985/z/Baseball")
+library(dplyr)
+library(ggplot2)
+library(knitr)
+library(pander)
+library(nnet)
+library(car)
+library(gtools)
+
+train <- read.csv("train.csv")
+
+head(train)
+nrow(train)
+```
+
+First, I'll look at some descriptive analysis of the training set.
+
+##Summary Table
+
+```{r}
+train.table <- train %>% 
+  group_by(pitch_type) %>%
+  dplyr::summarise (
+    count = n(),
+    avg.velo = mean(start_speed),
+    max.velo = max(start_speed),
+    min.velo = min(start_speed),
+    avg.horiz = mean(pfx_x),
+    avg.vert = mean(pfx_z),
+    avg.spinaxis = mean(spindirND),
+    avg.spinrate = mean(spinrateND),
+    max.spinrate = max(spinrateND),
+    min.spinrate = min(spinrateND)
+)
+
+pandoc.table(train.table, split.tables="INF", format="rmarkdown")
+```
+
+It looks like there is a sinker with negative spin-rate, as well as some max spin-rates that seem outside the norm. I will correct these later. Everything else seems pretty standard in terms of velocity and movement.
+
+
+##Velocity Descriptives
+
+```{r}
+ggplot(train, aes(x=pitch_type, y=start_speed)) + geom_boxplot() + labs(x="Pitch Type", y="Speed")
+```
+
+Here is a more detailed distribution of velocity by pitch type.
+
+##Movement Descriptives
+
+```{r}
+ggplot(train, aes(x = pfx_x, y = pfx_z)) + geom_point(aes(color = pitch_type)) + labs(x="Horizontal Movement", y="Vertical Movement") + scale_colour_discrete(name="Pitch Type")
+```
+
+Based on the movement of pitches, with all cutters, sliders, and curveballs moving in direction opposite of sinkers and changeups, it seems the pitchers are all right-handed. This is confirmed scanning through the pitcher names.
+
+This is a litle cluttered, so I'll look at some of these types of pitches in separate graphs.
+
+###Types of Fastballs
+
+```{r}
+train.fast <- subset(train, pitch_type == "FA" | pitch_type == "SI" | pitch_type == "FC")
+
+ggplot(train.fast, aes(x = pfx_x, y = pfx_z)) + geom_point(aes(color = pitch_type)) + labs(x="Horizontal Movement", y="Vertical Movement") + scale_colour_discrete(name="Pitch Type")
+```
+
+There is more overlap between 4-seamers and sinkers than either have with cutters. 4-seamers have most rise on the high-end, but does overlap with Sinkers in the middle of each pitch's distribution. 
+
+###Changeups vs. Sinkers
+
+```{r}
+train.SICHFS <- subset(train, pitch_type == "SI" | pitch_type == "CH" | pitch_type == "FS")
+
+ggplot(train.SICHFS, aes(x = pfx_x, y = pfx_z)) + geom_point(aes(color = pitch_type)) + labs(x="Horizontal Movement", y="Vertical Movement") + scale_colour_discrete(name="Pitch Type")
+```
+
+Some changeups are more neutral than sinkers in terms of horizontal movement, but some changeups have just as much run as sinkers. Changeups quite similar to splitters in both directions.
+
+###Breakingballs
+
+```{r}
+train.bb <- subset(train, pitch_type == "SL" | pitch_type == "CU" | pitch_type == "CS")
+
+ggplot(train.bb, aes(x = pfx_x, y = pfx_z)) + geom_point(aes(color = pitch_type)) + labs(x="Horizontal Movement", y="Vertical Movement") + scale_colour_discrete(name="Pitch Type")
+```
+
+Some outliers for sliders and curveballs moving into the other' area's distribution, but for the most part they are pretty distinct distinct.
+
+
+#Spin Descriptives
+
+```{r}
+ggplot(train, aes(x = spindirND, y = spinrateND)) + geom_point(aes(color = pitch_type)) + labs(x="Spin Axis", y="Spin Rate") + scale_colour_discrete(name="Pitch Type")
+```
+
+Seth Lugo set a Statcast record with 3498 rpm on Curveball.
+
+A distribution chart of 4-seamers spin-rate per Mike Petriello at MLB.com doesn't have any fastballs above the 2800 rpm bucket.
+
+Can't find info on max spin-rates on cutters, changeups, splitters, and sliders, but it would be strange for them to be above a 4-seam fastball.
+
+I see that spin-rate on knuckleballs cannot be properly tracked by Statcast or Trackman, but do not see any ready fix.
+
+To correct spin-rates: 
+
+Correct Curveballs above 3500 down to 3500.
+
+Correct Fastballs above 2900 to 2900.
+
+Correct cutters, changeups, splitters, sliders above 2900 to 2900.
+
+Correct the one pitch with negative spin-rate to 0.
+
+
+```{r}
+train$spinrateND[train$spinrateND > 3500 & train$pitch_type == "CU"] <- 3500
+train$spinrateND[train$spinrateND > 2900 & train$pitch_type != "CU"] <- 2900
+train$spinrateND[train$spinrateND < 0] <- 0
+
+ggplot(train, aes(x = spindirND, y = spinrateND)) + geom_point(aes(color = pitch_type)) + labs(x="Spin Axis", y="Spin Rate") + scale_colour_discrete(name="Pitch Type")
+```
+
+Despite cleaning spin-rate, there is a wide-range of spin-rates within pitch types. spin-axis seems to have cleaner dilineations, except for sliders. Since there is such variation within pitch types for spin-rate, this makes me believe it's not the best indicator for determining pitch types, while spin-axis should be useful.
+
+As with movement, I'll look at some of these types of pitches in separate graphs.
+
+
+###Types of Fastballs
+
+```{r}
+train.fast <- subset(train, pitch_type == "FA" | pitch_type == "SI" | pitch_type == "FC")
+
+ggplot(train.fast, aes(x = spindirND, y = spinrateND)) + geom_point(aes(color = pitch_type)) + labs(x="Spin Axis", y="Spin Rate") + scale_colour_discrete(name="Pitch Type")
+```
+
+Like with movement, there is more overlap between 4-seamers and Sinkers than either has with cutters. Cutters aren't as tightly clustered around a single spin-axis, and also are generally lower in spin-rate.
+
+###Changeups vs. Sinkers
+
+```{r}
+train.SICHFS <- subset(train, pitch_type == "SI" | pitch_type == "CH" | pitch_type == "FS")
+
+ggplot(train.SICHFS, aes(x = spindirND, y = spinrateND)) + geom_point(aes(color = pitch_type)) + labs(x="Spin Axis", y="Spin Rate") + scale_colour_discrete(name="Pitch Type")
+```
+
+Some changeups creep up into higher spin-rates, but at the low end there are not many sinkers. Again, not much distinction between changeups and splitters.
+
+###Breakingballs
+
+```{r}
+train.bb <- subset(train, pitch_type == "SL" | pitch_type == "CU" | pitch_type == "CS")
+
+ggplot(train.bb, aes(x = spindirND, y = spinrateND)) + geom_point(aes(color = pitch_type)) + labs(x="Spin Axis", y="Spin Rate") + scale_colour_discrete(name="Pitch Type")
+```
+
+Curveballs have higher spin-rates, and are tightly clustered around spin-axis.
+
+
+#Release Point Descriptives
+
+```{r}
+ggplot(train, aes(x = x0, y = z0)) + geom_point(aes(color = pitch_type)) + labs(x="Horizontal Release Point", y="Vertical Release Point") + scale_colour_discrete(name="Pitch Type") + xlim(-5,0) + ylim(5,8)
+```
+
+Release Point is far too dependent on the pitcher to be predictive across multiple pitchers.
+
+#Stand
+
+```{r}
+ggplot(train, aes(factor(pitch_type))) + geom_bar(aes(fill=stand)) + labs(x="Pitch Type", y="Count") + scale_fill_discrete(name="Stand")
+```
+
+There are more changeups to LHB, and more sliders to RHB, as expected with this slate of right-handed pitchers, but probably not enough to be predictive.
+
+#Count
+
+```{r}
+train$balls <- substr(train$count, 1,1)
+train$strikes <- substr(train$count, 3,3)
+
+ggplot(train, aes(factor(pitch_type))) + geom_bar(aes(fill=balls)) + labs(x="Pitch Type", y="Count") + scale_fill_discrete(name="# of Balls")
+
+ggplot(train, aes(factor(pitch_type))) + geom_bar(aes(fill=strikes)) + labs(x="Pitch Type", y="Count") + scale_fill_discrete(name="# of Strikes")
+```
+
+4-seamers and sinkers are more common in 3-ball counts, but I'm not sure if enough differentiation to be as predictive as hard pitch metrics.
+
+
+#Location
+
+```{r}
+q <- ggplot(train, aes(px, pz, color=pitch_type))
+q <- q + scale_x_continuous(limits = c(-3,3)) + scale_y_continuous(limits = c(0,5)) + ggplot2::annotate("rect", xmin = -1, xmax = 1, ymin = 1.5, ymax = 3.5, color = "black", alpha = 0) + ylab("Horizontal Location (ft.)") + xlab("Vertical Location (ft): Catcher's View") + labs(color = "Pitch Type")
+q <- q + geom_point(size=1, alpha = .65)
+q
+```
+
+###Types of Fastballs
+
+```{r}
+q <- ggplot(train.fast, aes(px, pz, color=pitch_type))
+q <- q + scale_x_continuous(limits = c(-3,3)) + scale_y_continuous(limits = c(0,5)) + ggplot2::annotate("rect", xmin = -1, xmax = 1, ymin = 1.5, ymax = 3.5, color = "black", alpha = 0) + ylab("Horizontal Location (ft.)") + xlab("Vertical Location (ft): Catcher's View") + labs(color = "Pitch Type")
+q <- q + geom_point(size=1, alpha = .65)
+q
+```
+
+###Breakingballs
+
+```{r}
+q <- ggplot(train.bb, aes(px, pz, color=pitch_type))
+q <- q + scale_x_continuous(limits = c(-3,3)) + scale_y_continuous(limits = c(0,5)) + ggplot2::annotate("rect", xmin = -1, xmax = 1, ymin = 1.5, ymax = 3.5, color = "black", alpha = 0) + ylab("Horizontal Location (ft.)") + xlab("Vertical Location (ft): Catcher's View") + labs(color = "Pitch Type")
+q <- q + geom_point(size=1, alpha = .65)
+q
+```
+
+Breakingballs (both sliders and curveballs) are located below the zone more frequently, but maybe not enough frequently to be predictive of pitch type.
+
+
+
+#Multinomial Logistic Regression
+
+With a categorical dependent variable with 11 different outcomes, I'll use a multinomial logistic regression model to predict the probabilities for each of the pitch types.
+
+While the descriptive analysis leads me to believe that velocity, horizontal and vertical movement, and spin-axis will be the most predicive independent variables, I'll first check if any of the other variables are significant.
+
+```{r}
+model <- multinom(pitch_type ~ start_speed + pfx_x + pfx_z + spinrateND + spindirND + px + pz + x0 + z0, train)
+
+Anova(model)
+```
+
+In this kitchen-sink model, only velocity, horizontal movement, and vertical movement are statistically significant. I've tried various combinations of these independent variables as well, but the best combination is the 4 variables in my initial hypothesis. I've also tried quadratics of these 4 variables and interactions between them, but I think the following model works best.
+
+```{r}
+model <- multinom(pitch_type ~ start_speed  + pfx_x + pfx_z + spindirND, train)
+
+Anova(model)
+```
+
+In this model, all 4 variables are highly significant. I'll next look at the coefficients. With the multinomial model, each independent variable will have different coefficients for determining the probability for each pitch type.
+
+```{r}
+print(model)
+```
+
+Next, I'll back-fit the model to the training set to see what percentage of the pitches got correctly identified. I'll base the prediction off the highest probability of the 11 probabilities calculated.
+
+```{r}
+probs <- predict(model, train, "probs")
+probs <- as.data.frame(probs)
+
+probs$maxprob <- apply(probs, 1, max)
+
+probs$prediction <- ifelse(probs$maxprob == probs$CH, "CH", ifelse(probs$maxprob == probs$CS, "CS", ifelse(probs$maxprob == probs$CU, "CU", ifelse(probs$maxprob == probs$FA, "FA", ifelse(probs$maxprob == probs$FC, "FC", ifelse(probs$maxprob == probs$FO, "FO", ifelse(probs$maxprob == probs$FS, "FS", ifelse(probs$maxprob == probs$KN, "KN", ifelse(probs$maxprob == probs$SI, "SI", ifelse(probs$maxprob == probs$SL, "SL", "EP"))))))))))
+
+train <- cbind(train, probs)
+
+train$correct <- ifelse(train$pitch_type == train$prediction, 1, 0)
+
+sum(train$correct)/nrow(train)
+```
+
+The model predicted 76% of the pitches correctly. I'll look at which were the common miscalculations.
+
+```{r}
+incorrect <- subset(train, correct == 0)
+
+train.crosstab <- table(incorrect$pitch_type, incorrect$prediction)
+
+train.crosstab
+```
+
+Some common mistakes:
+Changeups identified as sinkers, presumably hard changeups getting classified as soft changeups. As seen in the descriptives, velocity is the main thing separating changeups from sinkers, as movement and spin were similar, but if you have a pitcher like Zack Greinke or Felix Hernandez who throw their changeups with only slight separations from their fastballs, it could register similarly to a soft-tossing sinkerballer.
+
+Curveballs identified as sliders, cutters identified as sliders, sliders identified as curveballs or cutters. With these pitch types, it's more of a gradient than a clean separation. Some pitchers throw hard sliders similar to cutters, others throw more of a slurve. A pitcher like Corey Kluber simply calls his pitch a breakingball.
+
+4-seamers identified as sinkers, and vice-versa. As seen in the descriptives, there is some overlap in each of the independent variables.
+
+Splitters identified as changeups. This could be the hardest distinction given the lack of separation seen in the descriptives.
+
+
+#2-Step Multinomial Regression
+
+To try to improve the model, I'll try to do the model in two-steps. I'll include cutters with the breakingballs given some of the common mistakes, although it could reasonably fit with the fastballs as well. In Part 1, I'll identify the pitch as "Straight", "Breaking", and knuckleballs, eephuses, and pitch-outs. I think the independent variables could be more predictive with fewer outcomes to determine. For example, determining a cutter from a slider could be easier when the model doesn't have to also evaluate if the cutter is a 4-seamer, changeup, or other pitch.
+
+##Part 1
+
+```{r}
+train <- read.csv("train.csv")
+train$spinrateND[train$spinrateND > 3500 & train$pitch_type == "CU"] <- 3500
+train$spinrateND[train$spinrateND > 2900 & train$pitch_type != "CU"] <- 2900
+train$spinrateND[train$spinrateND < 0] <- 0
+
+train$pitch_type2[train$pitch_type == "FA" | train$pitch_type == "SI" | train$pitch_type == "CH" | train$pitch_type == "FS"] <- "Straight"
+train$pitch_type2[train$pitch_type == "CU" | train$pitch_type == "SL" | train$pitch_type == "FC" | train$pitch_type == "CS"] <- "Breaking"
+train$pitch_type2[train$pitch_type == "KN"] <- "KN"
+train$pitch_type2[train$pitch_type == "EP"] <- "EP"
+train$pitch_type2[train$pitch_type == "FO"] <- "FO"
+
+model <- multinom(pitch_type2 ~ start_speed + pfx_x + pfx_z + spindirND, train)
+
+Anova(model)
+
+print(model)
+
+probs <- predict(model, train, "probs")
+probs <- as.data.frame(probs)
+
+probs$maxprob <- apply(probs, 1, max)
+
+probs$prediction <- ifelse(probs$maxprob == probs$Straight, "Straight", ifelse(probs$maxprob == probs$Breaking, "Breaking", ifelse(probs$maxprob == probs$FO, "FO", ifelse(probs$maxprob == probs$KN, "KN", "EP"))))
+
+train <- cbind(train, probs)
+
+train$correct <- ifelse(train$pitch_type2 == train$prediction, 1, 0)
+
+sum(train$correct)/nrow(train)
+```
+
+Back-fitting the model after Part 1, it correctly identifies 95% of the pitches as straight, breaking, or one of the other pitch types.
+
+##Separate
+
+```{r}
+train.straight <- subset(train, pitch_type2 == "Straight")
+train.breaking <- subset(train, pitch_type2 == "Breaking")
+train.other <- subset(train, pitch_type == "KN" | pitch_type == "FO" | pitch_type == "EP")
+```
+
+##Part 2A: Straight Pitches
+
+```{r}
+model.straight <- multinom(pitch_type ~ start_speed + pfx_x + pfx_z + spindirND, train.straight)
+
+Anova(model.straight)
+
+print(model.straight)
+
+probs.straight <- predict(model.straight, train.straight, "probs")
+probs.straight <- as.data.frame(probs.straight)
+
+probs.straight$maxprob.straight <- apply(probs.straight, 1, max)
+
+probs.straight$prediction.straight <- ifelse(probs.straight$maxprob.straight == probs.straight$FA, "FA", ifelse(probs.straight$maxprob.straight == probs.straight$SI, "SI", ifelse(probs.straight$maxprob.straight == probs.straight$CH, "CH", "FS")))
+
+train.straight <- cbind(train.straight, probs.straight)
+
+train.straight$correct.straight <- ifelse(train.straight$pitch_type == train.straight$prediction.straight, 1, 0)
+
+sum(train.straight$correct.straight)/nrow(train.straight)
+```
+
+All 4 variables are statisically significant when separating out straight pitches. When back-fitting, 79% of straight pitches are correctly identified.
+
+
+##Part 2B: Breaking Pitches
+
+```{r}
+model.breaking <- multinom(pitch_type ~ start_speed + pfx_x + pfx_z + spindirND, train.breaking)
+
+Anova(model.breaking)
+
+print(model.breaking)
+
+probs.breaking <- predict(model.breaking, train.breaking, "probs")
+probs.breaking <- as.data.frame(probs.breaking)
+
+probs.breaking$maxprob.breaking <- apply(probs.breaking, 1, max)
+
+probs.breaking$prediction.breaking <- ifelse(probs.breaking$maxprob.breaking == probs.breaking$CU, "CU", ifelse(probs.breaking$maxprob.breaking == probs.breaking$SL, "SL", ifelse(probs.breaking$maxprob.breaking == probs.breaking$FC, "FC", "CS")))
+
+train.breaking <- cbind(train.breaking, probs.breaking)
+
+train.breaking$correct.breaking <- ifelse(train.breaking$pitch_type == train.breaking$prediction.breaking, 1, 0)
+
+sum(train.breaking$correct.breaking)/nrow(train.breaking)
+```
+
+Only velocity and vertical movement are statistically significant when determining pitch types within breaking pitches. When back-fitting, 83% of breaking pitches are correctly identified.
+
+```{r}
+(sum(train.breaking$correct.breaking) + sum(train.straight$correct.straight) + sum(train.other$correct))/nrow(train)
+```
+
+Overall, 80% of pitches are back-fitted correctly, a slight improvement, but many of the harder distinctions remain.
+
+
+#Apply to Test Set
+
+I'll now apply the two-part model to the test dataset.
+
+```{r}
+test <- read.csv("test.csv")
+
+#Part 1
+
+probs2 <- predict(model, test, "probs")
+probs2 <- as.data.frame(probs2)
+
+probs2$maxprob <- apply(probs2, 1, max)
+
+probs2$prediction <- ifelse(probs2$maxprob == probs2$Straight, "Straight", ifelse(probs2$maxprob == probs2$Breaking, "Breaking", ifelse(probs2$maxprob == probs2$FO, "FO", ifelse(probs2$maxprob == probs2$KN, "KN", "EP"))))
+
+test <- cbind(test, probs2)
+
+#Separate
+
+test.straight <- subset(test, prediction == "Straight")
+test.breaking <- subset(test, prediction == "Breaking")
+test.other <- subset(test, prediction == "KN" | prediction == "FO" | prediction == "EP")
+
+#Part 2A
+
+probs.straight <- predict(model.straight, test.straight, "probs")
+probs.straight <- as.data.frame(probs.straight)
+
+probs.straight$maxprob.straight <- apply(probs.straight, 1, max)
+
+probs.straight$prediction.straight <- ifelse(probs.straight$maxprob.straight == probs.straight$FA, "FA", ifelse(probs.straight$maxprob.straight == probs.straight$SI, "SI", ifelse(probs.straight$maxprob.straight == probs.straight$CH, "CH", "FS")))
+
+test.straight <- cbind(test.straight, probs.straight)
+
+#Part 2B
+
+probs.breaking <- predict(model.breaking, test.breaking, "probs")
+probs.breaking <- as.data.frame(probs.breaking)
+
+probs.breaking$maxprob.breaking <- apply(probs.breaking, 1, max)
+
+probs.breaking$prediction.breaking <- ifelse(probs.breaking$maxprob.breaking == probs.breaking$CU, "CU", ifelse(probs.breaking$maxprob.breaking == probs.breaking$SL, "SL", ifelse(probs.breaking$maxprob.breaking == probs.breaking$FC, "FC", "CS")))
+
+#Combine
+
+test.breaking <- cbind(test.breaking, probs.breaking)
+
+test.2 <- smartbind(test.straight, test.breaking, test.other)
+
+test.2$prediction2[test.2$prediction.straight == "FA"] <- "FA"
+test.2$prediction2[test.2$prediction.straight == "SI"] <- "SI"
+test.2$prediction2[test.2$prediction.straight == "CH"] <- "CH"
+test.2$prediction2[test.2$prediction.straight == "FS"] <- "FS"
+test.2$prediction2[test.2$prediction.breaking == "FC"] <- "FC"
+test.2$prediction2[test.2$prediction.breaking == "SL"] <- "SL"
+test.2$prediction2[test.2$prediction.breaking == "CU"] <- "CU"
+test.2$prediction2[test.2$prediction.breaking == "CS"] <- "CS"
+test.2$prediction2[test.2$prediction == "KN"] <- "KN"
+test.2$prediction2[test.2$prediction == "FO"] <- "FO"
+test.2$prediction2[test.2$prediction == "EP"] <- "EP"
+
+test.2 <- subset(test.2, select= -c(Breaking, EP, FO, KN, Straight, maxprob, prediction, CH, FA, FS, SI, maxprob.straight, prediction.straight, CS, CU, FC, SL, maxprob.breaking, prediction.breaking))
+```
+
+#Descriptives for Test Set
+
+As a sanity check, I'll look at some of the more helpful descriptive tables and analysis for the test set.
+
+##Summary Table
+
+```{r}
+test.table <- test.2 %>% 
+  group_by(prediction2) %>%
+  dplyr::summarise (
+    count = n(),
+    avg.velo = mean(start_speed),
+    max.velo = max(start_speed),
+    min.velo = min(start_speed),
+    avg.horiz = mean(pfx_x),
+    avg.vert = mean(pfx_z),
+    avg.spinaxis = mean(spindirND),
+    avg.spinrate = mean(spinrateND),
+    max.spinrate = max(spinrateND),
+    min.spinrate = min(spinrateND)
+)
+
+pandoc.table(test.table, split.tables="INF", format="rmarkdown")
+```
+
+##Velocity Descriptives
+
+```{r}
+ggplot(test.2, aes(x=prediction2, y=start_speed)) + geom_boxplot() + labs(x="Pitch Type", y="Speed")
+```
+
+##Movement Descriptives
+
+```{r}
+ggplot(test.2, aes(x = pfx_x, y = pfx_z)) + geom_point(aes(color = prediction2)) + labs(x="Horizontal Movement", y="Vertical Movement") + scale_colour_discrete(name="Pitch Type")
+```
+
+##Spin Descriptives
+
+```{r}
+test.2$spinrateND[test.2$spinrateND > 3500 & test.2$prediction2 == "CU"] <- 3500
+test.2$spinrateND[test.2$spinrateND > 2900 & test.2$prediction2 != "CU"] <- 2900
+test.2$spinrateND[test.2$spinrateND < 0] <- 0
+
+ggplot(test.2, aes(x = spindirND, y = spinrateND)) + geom_point(aes(color = prediction2)) + labs(x="Spin Axis", y="Spin Rate") + scale_colour_discrete(name="Pitch Type")
+```
+
+Most of this checks out to me. The main thing that stands out to me is that the model only predicted 5 splitters, likely classifying them as changeups, but I have not determined any independent variables that really separates the two pitch types. The descriptive graphs show the pitches identified as splitters have a different spin-axis than those identified as changeups, which might be true in the training graph, but the training graph has a lot more noise.
+
+#Export Test Set
+
+```{r}
+write.csv(test.2, "test.2.csv")
+```
